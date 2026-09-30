@@ -1,0 +1,122 @@
+# Public proxy sources.
+#
+# This file is re-read at the start of every refresh cycle (default: every
+# 5 minutes) - edit it without restarting anything. A broken edit is logged and
+# the previous valid configuration keeps being used.
+#
+# ---------------------------------------------------------------------------
+# LEGAL / ETHICAL REQUIREMENT - READ BEFORE ENABLING ANY SOURCE
+# ---------------------------------------------------------------------------
+# Only configure sources whose terms of use / license allow
+#   (a) automated retrieval, and
+#   (b) redistribution of the data (this project republishes it via the API,
+#       the generated files and optionally a git branch).
+# Check the source's license, README and terms, then set
+# `redistribution_verified: true` for that source. While
+# STRICT_SOURCE_LICENSING=true (the default) sources without that flag are
+# skipped even when enabled.
+#
+# The entries below are EXAMPLES of commonly used GitHub-hosted lists. They are
+# disabled and unverified on purpose: the maintainers of this project have not
+# verified their current terms for you, and URLs or licenses may have changed.
+#
+# Fields
+#   name                    unique id [A-Za-z0-9_.-], stored as source attribution
+#   url                     http(s):// or file:// (local list you maintain)
+#   protocol                http | https | socks4 | socks5 | auto
+#                           (auto = take the scheme from each record, else
+#                            validator.yaml network.auto_default_protocol)
+#   format                  text | regex | csv | json   (see collector/parser.py)
+#   parser_options          format-specific options (examples below)
+#   enabled                 true / false
+#   priority                1 = highest; first source listing a proxy is its primary attribution
+#   timeout                 seconds (default: defaults.timeout)
+#   min_interval_seconds    never fetch more often than this (politeness, default 300)
+#   license / homepage      free text for your records
+#   redistribution_verified you checked (a) and (b) above
+
+defaults:
+  timeout: 20
+  max_bytes: 20000000          # hard cap per download
+  concurrency: 8               # parallel source downloads
+  min_interval_seconds: 300
+  user_agent: "proxy-quality-api/1.0 (+source refresh)"
+
+sources:
+  # --- plain text lists, one ip:port per line ---------------------------------
+  - name: thespeedx_http
+    url: "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+    protocol: http
+    format: text
+    enabled: false
+    priority: 3
+    homepage: "https://github.com/TheSpeedX/PROXY-List"
+    license: "verify in repository before enabling"
+    redistribution_verified: false
+
+  - name: thespeedx_socks4
+    url: "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt"
+    protocol: socks4
+    format: text
+    enabled: false
+    priority: 3
+    homepage: "https://github.com/TheSpeedX/PROXY-List"
+    license: "verify in repository before enabling"
+    redistribution_verified: false
+
+  - name: thespeedx_socks5
+    url: "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"
+    protocol: socks5
+    format: text
+    enabled: false
+    priority: 3
+    homepage: "https://github.com/TheSpeedX/PROXY-List"
+    license: "verify in repository before enabling"
+    redistribution_verified: false
+
+  # --- list with protocol://ip:port lines (protocol taken from each record) ---
+  - name: proxifly_all
+    url: "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"
+    protocol: auto
+    format: text
+    enabled: false
+    priority: 2
+    homepage: "https://github.com/proxifly/free-proxy-list"
+    license: "verify in repository before enabling"
+    redistribution_verified: false
+
+  # --- your own list maintained on the VPS ----------------------------------
+  - name: local_list
+    url: "file:///app/config/local-proxies.txt"
+    protocol: auto
+    format: text
+    enabled: false
+    priority: 1
+    notes: "one proxy per line, e.g. socks5://203.0.113.10:1080"
+    redistribution_verified: false
+
+  # --- CSV example ---------------------------------------------------------------
+  # - name: example_csv
+  #   url: "https://example.org/proxies.csv"
+  #   protocol: auto
+  #   format: csv
+  #   parser_options:
+  #     has_header: true
+  #     ip_column: ip            # header name or 0-based index
+  #     port_column: port
+  #     protocol_column: type    # optional
+  #   enabled: false
+  #   redistribution_verified: false
+
+  # --- JSON example --------------------------------------------------------------
+  # - name: example_json
+  #   url: "https://example.org/api/proxies.json"
+  #   protocol: auto
+  #   format: json
+  #   parser_options:
+  #     items_path: data.items    # dot path to the list ("" = document root)
+  #     ip_field: ip
+  #     port_field: port
+  #     protocol_field: protocols # string or list, optional
+  #   enabled: false
+  #   redistribution_verified: false

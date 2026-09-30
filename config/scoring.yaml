@@ -1,0 +1,36 @@
+# Quality score (0-100). Read at worker start; new weights apply to each proxy
+# on its next validation. Weights must sum to 100.
+# Every input is measured by this system; no external reputation data is used.
+
+weights:
+  reliability: 35     # recent success rate (last `recent_window` checks) x confidence
+  historical: 20      # lifetime success rate x confidence
+  latency: 20         # latency tier factor (EWMA of end-to-end probe time)
+  https: 10           # last HTTPS (CONNECT/TLS) capability check passed
+  protocol: 5         # 1 - share of protocol/handshake failures
+  exit_ip: 5          # exit IP verified (probe saw a non-origin address, nonce matched)
+  consistency: 5      # 0.5 exit-IP stability + 0.5 latency stability (1 - coefficient of variation)
+
+# Confidence ramps: few samples cannot earn full points, so one successful
+# request can never produce a high-quality proxy.
+recent_confidence_samples: 3       # 3/3 recent successes -> full reliability points
+historical_confidence_samples: 10  # full historical points after 10 checks
+
+latency_tiers:          # first tier with latency < max_ms applies; factor x latency weight
+  - {max_ms: 500,  factor: 1.00, label: excellent}
+  - {max_ms: 1000, factor: 0.85, label: very_good}
+  - {max_ms: 2000, factor: 0.65, label: good}
+  - {max_ms: 3000, factor: 0.40, label: acceptable}
+  - {max_ms: 5000, factor: 0.15, label: poor}
+latency_over_max_factor: 0.0   # >= 5000 ms: no latency points
+
+consecutive_failure_penalty: 8   # points removed per consecutive failure
+https_unknown_factor: 0.0        # HTTPS not yet tested
+
+classes:                # minimum score per class; below `backup` = REJECTED (not served)
+  premium: 90
+  high: 80
+  normal: 65
+  backup: 50
+
+unconfirmed_max_class: backup    # best class possible before min_checks_for_quality checks

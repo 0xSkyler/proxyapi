@@ -1,0 +1,31 @@
+# secrets / local config
+.env
+config/local-proxies.txt
+
+# generated data
+data/*
+!data/generated/
+data/generated/*
+!data/generated/.gitkeep
+backups/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

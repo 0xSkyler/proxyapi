@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proxy-quality-api"
+version = "1.0.0"
+description = "Continuously collects, validates, scores and serves high-quality public proxies."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "proxy-quality-api contributors" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Framework :: FastAPI",
+  "Framework :: AsyncIO",
+  "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.30",
+  "httpx>=0.27,<1.0",
+  "sqlalchemy[asyncio]>=2.0.30,<2.2",
+  "asyncpg>=0.29",
+  "alembic>=1.13",
+  "redis>=5.0",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.3,<3",
+  "pyyaml>=6.0",
+  "orjson>=3.10",
+  "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "fakeredis>=2.23", "ruff>=0.6"]
+
+[project.scripts]
+proxy-quality = "proxy_quality.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"proxy_quality.database" = ["migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning:fakeredis.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I", "ASYNC", "S"]
+ignore = [
+  "E501",   # long SQL / log lines are fine
+  "B008",   # FastAPI Depends/Query defaults
+  "S101",   # asserts in tests and invariants
+  "S104",   # binding 0.0.0.0 inside containers is intended
+  "S311",   # random is not used for security
+  "S608",   # SQL is built from constants only
+  "ASYNC109",
+  "ASYNC110", # short polling loop during shutdown is intentional
+  "S110",     # best-effort socket close / health responses
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "ASYNC"]

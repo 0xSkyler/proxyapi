@@ -1,0 +1,188 @@
+# Production stack: postgres + redis + migrate (one-shot) + worker + api + nginx.
+#   cp .env.example .env   # then edit secrets / probe URL
+#   docker compose up -d --build
+#
+# All long-running services use `restart: unless-stopped`, so they come back
+# after crashes and after a VPS reboot (Docker itself is enabled at boot by
+# scripts/install.sh). The worker waits for PostgreSQL/Redis on its own, so
+# start-up order after a reboot does not matter.
+
+name: proxy-quality
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-app: &app
+  build:
+    context: .
+    args:
+      INSTALL_GIT: "${INSTALL_GIT:-true}"
+  image: proxy-quality-api:latest
+  env_file: .env
+  environment:
+    DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-pqa}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-pqa}"
+    REDIS_URL: "redis://redis:6379/0"
+    CONFIG_DIR: /app/config
+    DATA_DIR: /app/data/generated
+    GIT_PUBLISH_WORKDIR: /app/data/git-publish
+  volumes:
+    - ./config:/app/config:ro
+  init: true
+  restart: unless-stopped
+  logging: *logging
+  networks: [backend]
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-pqa}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: "${POSTGRES_DB:-pqa}"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-384MB}
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=40
+      # health statistics tolerate losing the last few hundred ms on a crash;
+      # this removes an fsync from every batch commit
+      - -c
+      - synchronous_commit=off
+      - -c
+      - wal_compression=on
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - autovacuum_naptime=30s
+      - -c
+      - random_page_cost=1.1
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    shm_size: 128m
+    mem_limit: "${POSTGRES_MEM_LIMIT:-512m}"
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+
+  redis:
+    image: redis:7-alpine
+    # pure cache: the worker rebuilds the pool from PostgreSQL within seconds, so no persistence
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - "${REDIS_MAXMEMORY:-192mb}"
+      - --maxmemory-policy
+      - noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: "${REDIS_MEM_LIMIT:-256m}"
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+
+  migrate:
+    <<: *app
+    command: ["python", "-m", "proxy_quality", "migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "proxy_quality", "worker"]
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    sysctls:
+      # more ephemeral ports and faster recycling for high-rate outbound validation
+      net.ipv4.ip_local_port_range: "10240 65000"
+      net.ipv4.tcp_fin_timeout: "15"
+      net.ipv4.tcp_tw_reuse: "1"
+    healthcheck:
+      test: ["CMD", "python", "-m", "proxy_quality", "healthcheck", "http://127.0.0.1:8081/health"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 60s
+    stop_grace_period: 30s
+    mem_limit: "${WORKER_MEM_LIMIT:-768m}"
+
+  api:
+    <<: *app
+    command: ["python", "-m", "proxy_quality", "api"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "proxy_quality", "healthcheck", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    expose: ["8000"]
+    mem_limit: "${API_MEM_LIMIT:-384m}"
+    networks: [backend, frontend]
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./data/generated:/usr/share/nginx/data:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    mem_limit: 128m
+    restart: unless-stopped
+    logging: *logging
+    networks: [frontend]
+
+networks:
+  backend:
+  frontend:
+
+volumes:
+  pgdata:

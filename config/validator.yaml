@@ -1,0 +1,91 @@
+# Validator behaviour. Read at worker start (restart the worker after edits:
+#   docker compose restart worker).
+# Environment overrides: FAST_VALIDATION_CONCURRENCY, DEEP_VALIDATION_CONCURRENCY,
+# ADAPTIVE_CONCURRENCY.
+
+timeouts:                 # seconds
+  tcp_connect: 2.0        # stage 2: TCP connect
+  handshake: 3.0          # stage 3: SOCKS4/5 handshake, HTTP CONNECT
+  request: 6.0            # probe request through the proxy (first byte -> body)
+  tls: 4.0                # TLS handshake of the HTTPS capability check
+  stage_wait: 5.0         # max wait for a free deep-stage slot before rescheduling (no penalty)
+
+concurrency:
+  fast: 300               # max simultaneous fast-stage connections (starting values only;
+  deep: 100               # max simultaneous deep-stage checks      tune for your VPS)
+  adaptive:
+    enabled: true
+    interval_seconds: 5
+    start_fraction: 0.5   # start at 50 % of max, grow while healthy
+    min_fast: 25
+    min_deep: 10
+    cpu_high: 85          # % -> shrink
+    cpu_low: 60           # % -> allowed to grow
+    memory_high: 85       # % of container memory limit -> shrink
+    loop_lag_high_ms: 250 # event-loop lag -> shrink
+    loop_lag_low_ms: 50
+    local_error_ratio_high: 0.02  # EMFILE/ENOBUFS/EADDRNOTAVAIL share -> shrink
+    step_up: 1.15
+    step_down: 0.75
+
+queue:
+  fast_queue_size: 2000       # bounded queues: memory stays flat regardless of backlog
+  deep_queue_size: 200
+  dispatch_batch: 500
+  claim_lease_seconds: 300    # crash safety: unfinished claims become due again
+  idle_sleep_seconds: 1.0
+  result_batch_size: 500      # DB writes are batched ...
+  result_flush_seconds: 2.0   # ... and flushed at least this often
+  max_pending_results: 50000  # memory guard while the DB is unreachable
+
+reliability:
+  confirmation_delays: [30, 90]   # initial validation + 2 spaced confirmation probes
+  min_checks_for_quality: 3       # below this, class is capped (scoring.yaml unconfirmed_max_class)
+  recent_window: 10               # checks in the "recent success rate" window
+  latency_ewma_alpha: 0.3
+
+https:
+  enabled: true
+  recheck_interval_seconds: 1800  # HTTPS capability is re-verified at most this often per proxy
+
+revalidation:
+  intervals:              # seconds between checks of working proxies, by class
+    premium: 240          # < fresh_seconds so premium/high stay FRESH
+    high: 240
+    normal: 360
+    backup: 600
+    rejected: 1800        # working but low score
+  failure_backoff: [120, 600, 1800, 7200, 43200]  # retry delay after 1st, 2nd, 3rd, 4th, 5th+ consecutive failure
+  never_succeeded_backoff: [1800, 14400, 86400]   # proxies that never worked back off fast
+  degraded_after: 2       # consecutive failures -> degraded
+  quarantine_after: 3     # -> removed from live pool
+  blacklist_after: 5      # -> temporary blacklist
+  never_succeeded_blacklist_after: 3
+  blacklist_seconds: 86400
+  rejected_recheck_seconds: 86400   # proxies caught bypassing (exit IP == our IP)
+  revival_feed_window_seconds: 3600 # blacklisted proxies are only re-tested if still listed by a feed
+  local_error_retry_seconds: 30
+
+freshness:                # age since last *successful* validation
+  fresh_seconds: 300      # FRESH
+  good_seconds: 900       # GOOD   (API default max_age)
+  stale_seconds: 1800     # STALE  (only served when max_age is requested explicitly)
+  max_servable_seconds: 3600
+  export_max_age_seconds: 900   # generated files only contain FRESH + GOOD proxies
+
+network:
+  allow_hostnames: false  # only IP literals from feeds
+  allow_ipv6: true
+  blocked_ports: [25, 465, 587]
+  max_response_bytes: 16384   # probe replies are tiny; anything bigger fails
+  user_agent: "proxy-quality-api/1.0 (+proxy health probe)"
+  socks5_remote_dns: true
+  cross_protocol_discovery: true  # e.g. feed says socks5 but it answers HTTP -> add an http candidate
+  auto_default_protocol: http
+
+retention:
+  proxy_unseen_days: 7        # delete proxies absent from feeds AND not working for this long
+  check_log_days: 3
+  refresh_runs_days: 30
+  check_log_mode: successes   # all | successes | none
+  pool_max_size: 20000
