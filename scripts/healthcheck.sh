@@ -13,7 +13,7 @@ set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
-HTTP_PORT="${HTTP_PORT:-$(grep -E '^HTTP_PORT=' .env 2>/dev/null | tail -n1 | cut -d= -f2)}"
+HTTP_PORT="${HTTP_PORT:-$( (grep -E '^HTTP_PORT=' .env 2>/dev/null || true) | tail -n1 | cut -d= -f2)}"
 HTTP_PORT="${HTTP_PORT:-80}"
 
 URL="http://127.0.0.1:${HTTP_PORT:-80}"

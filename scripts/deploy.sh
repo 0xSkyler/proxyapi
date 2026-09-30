@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
-HTTP_PORT="${HTTP_PORT:-$(grep -E '^HTTP_PORT=' .env 2>/dev/null | tail -n1 | cut -d= -f2)}"
+HTTP_PORT="${HTTP_PORT:-$( (grep -E '^HTTP_PORT=' .env 2>/dev/null || true) | tail -n1 | cut -d= -f2)}"
 HTTP_PORT="${HTTP_PORT:-80}"
 log() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 
