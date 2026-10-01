@@ -6,7 +6,7 @@ It is built for unattended 24/7 operation on a small Ubuntu VPS: one long-runnin
 
 ```
 public sources ─► collect ─► normalize ─► dedupe ─► FAST validation ─► DEEP validation ─► reliability
-   (5 min)                                           TCP + handshake    probe, exit IP,     confirmations
+   (2 min)                                           TCP + handshake    probe, exit IP,     confirmations
                                                                         HTTPS, timings      + history
                                                                                                 │
       JSON/TXT files ◄─ exporter ◄─ Redis live pool ◄─ pool sync ◄─ scoring + health ◄─────────┘
@@ -41,7 +41,7 @@ public sources ─► collect ─► normalize ─► dedupe ─► FAST validat
 
 ## Features
 
-* **5-minute refresh cycle** inside a long-running service. The app is never restarted per cycle; validation never pauses.
+* **2-minute refresh cycle** inside a long-running service. The app is never restarted per cycle; validation never pauses.
 * **Rolling updates**: the served pool is replaced atomically (Redis `RENAME` in `MULTI/EXEC`, files via temp file + `rename`). A refresh never empties the pool, and a failing update keeps the previous snapshot live.
 * **HTTP, HTTPS (CONNECT), SOCKS4/4a, SOCKS5** with real protocol handshakes. A claimed protocol is verified, never assumed. Passive cross-protocol detection adds candidates, for example when a feed labels an HTTP proxy as SOCKS5.
 * **Cheap checks first**: TCP connect (2 s) → protocol handshake (3 s) → only survivors get the probe request, exit-IP verification, TLS check and timings.
@@ -77,7 +77,7 @@ validator/   tcp_check · socks4_check · socks5_check · http_check · https_ch
              exit_ip_check · latency_check · reliability_check · probe · checker (fast/deep stages)
              adaptive (limiter + controller) · validation_manager (queues, workers, batched writer)
 scoring/     calculator (score) · quality_classes · health (history, failure ladder, scheduling)
-scheduler/   runner (in-process job scheduler) · source_refresh (5-min cycle) · revalidation (dispatcher)
+scheduler/   runner (in-process job scheduler) · source_refresh (2-min cycle) · revalidation (dispatcher)
              pool_sync (Redis publication) · exporter · cleanup
 database/    models · repository (all SQL) · migrations (Alembic)
 cache/       redis_pool
@@ -99,11 +99,11 @@ sudo git clone https://github.com/<you>/proxy-quality-api.git /opt/proxy-quality
 cd /opt/proxy-quality-api && sudo bash scripts/install.sh
 ```
 
-`install.sh` installs Docker from Docker's official apt repository and enables it at boot. It applies network sysctl tuning, then creates `.env` with a random database password and the probe URL `http://<public-ip>/probe`. It prepares `data/`, installs cron jobs (self-heal every 5 min, daily backup) and starts the stack. Add `--firewall` to enable ufw with ports 22, 80 and 443. It is safe to re-run.
+`install.sh` installs Docker from Docker's official apt repository and enables it at boot. It applies network sysctl tuning, then creates `.env` with a random database password, ProxyScrape judge validation enabled, and the detected public origin IP. It prepares `data/`, installs cron jobs (self-heal every 5 min, daily backup) and starts the stack. Add `--firewall` to enable ufw with ports 22, 80 and 443. It is safe to re-run.
 
 Then:
 
-1. **Enable sources** in `config/sources.yaml` (see the next section). The shipped examples are disabled on purpose. Changes are picked up at the next refresh with no restart.
+1. **ProxyScrape is already enabled as the only public source** in `config/sources.yaml`. Source changes are picked up at the next refresh with no restart.
 2. Watch the first cycles with `docker compose logs -f worker`.
 3. Query `curl 'http://<server>/api/v1/proxies?protocol=socks5&min_score=80&format=txt'`.
 
@@ -115,63 +115,35 @@ Manual installation without the script:
 cp .env.example .env
 ```
 
-Then edit `POSTGRES_PASSWORD`, `PROBE_HTTP_URL` and `ORIGIN_IP` in `.env`, and start the stack:
+Then edit `POSTGRES_PASSWORD` as needed. ProxyScrape judge validation and a 120-second refresh are already the defaults; `ORIGIN_IP` can stay empty for auto-detection:
 
 ```bash
 mkdir -p data/generated && sudo chown -R 10001:10001 data && docker compose up -d --build
 ```
 
-## Configuring sources — legal requirements
+## Proxy source
 
-> **Only configure sources whose terms allow automated retrieval _and_ redistribution.**
-> This service republishes what it collects through its API, its generated files and, optionally, a public git branch. For every source, the administrator must check its license, README and terms of service, and must follow them. Scraping websites against their terms is out of scope for this project.
+ProxyScrape's v4 free-proxy-list API is the **only public source** configured in this repository. The worker fetches it every 120 seconds, parses the protocol included with each record, normalizes the endpoint, deduplicates it, and sends new or due entries through the validator.
 
-Safeguards built into the code:
+The configured endpoint is in `config/sources.yaml`. `STRICT_SOURCE_LICENSING=true` remains enabled. Before redistributing generated proxy lists from your deployment, review the provider's current terms.
 
-* `STRICT_SOURCE_LICENSING=true` (the default) skips every source unless it has `redistribution_verified: true` in `config/sources.yaml`. You set that flag after you have verified the terms.
-* All shipped example sources are `enabled: false` and `redistribution_verified: false`.
-* Each source is fetched at most once per `min_interval_seconds` (default 300 s). Conditional requests (`ETag` / `If-Modified-Since`) make unchanged lists cost a `304`. Downloads are capped at 20 MB.
-* Source attribution is stored per proxy (`proxies.sources`, `first_source`), and per-source fetch health is kept in the `sources` table (`GET /api/v1/sources`).
+Normalization rejects blank or corrupt lines, malformed or unsupported schemes, credentials, invalid IPs, non-public addresses (private, loopback, link-local, reserved, documentation, multicast), and blocked or invalid ports.
 
-Supported formats: plain `ip:port`, `protocol://ip:port`, newline lists with extra columns, `regex` (pulls `[scheme://]ip:port` out of any text), CSV (column names or indexes), and JSON (dot-path to a list of strings or objects, with protocol given as a string or a list). To add a format, register a parser in `collector/parser.py`:
+## ProxyScrape-style validation
 
-```python
-@register_parser("my_format")
-def parse_my_format(text: str, options: dict) -> Iterator[RawEntry]:
-    ...
-```
+The default HTTP judge is `http://judge1.api.proxyscrape.com`, matching ProxyScrape's open-source checker defaults. The worker first verifies that the endpoint actually speaks the claimed HTTP, SOCKS4 or SOCKS5 protocol, then sends a small judge request through the proxy and records end-to-end response time.
 
-Normalization rejects blank or corrupt lines, malformed or unsupported schemes, credentials, invalid IPs (including leading-zero forms), **non-public addresses** (private, loopback, link-local, reserved, documentation, multicast), and ports outside 1–65535 or in `blocked_ports`. Hostnames are rejected unless `network.allow_hostnames` is enabled.
+The judge response supplies the observed exit address and environment information used for the three anonymity classes:
 
-## The probe endpoint
+* `transparent`: the validator's public/origin IP is visible in the judge response.
+* `anonymous`: the origin IP is not visible, but `HTTP_VIA` or `PROXY_REMOTE_ADDR` is present.
+* `elite`: neither disclosure signal is present.
 
-Deep validation sends one tiny request through the proxy to a probe endpoint. By default that endpoint is **served by your own nginx** (`location = /probe` in `nginx/proxy.conf`), so no third-party website receives validation traffic:
+The classifier intentionally uses that order so it matches ProxyScrape's published checker logic. The same three labels are used for HTTP, SOCKS4 and SOCKS5; there is no separate `tunnel` class.
 
-```
-GET http://<vps-ip>/probe?n=<random nonce>
+The validator's own public IP is resolved with `https://api.proxyscrape.com/ip.php` first and then fallback IP-echo services. `ORIGIN_IP` may also be set explicitly. The existing local nginx `/probe` endpoint is still available for controlled testing, but it is no longer the deployment default.
 
-ip=<address that reached nginx = the proxy's exit IP>
-n=<echoed nonce>
-via=<Via header>            ← only present if the proxy added it
-xff=<X-Forwarded-For header>
-fwd=<Forwarded header>
-```
-
-The validator uses this reply to:
-
-* **verify the exit IP**: the address seen by the probe must differ from the VPS's own public IP (`ORIGIN_IP`, auto-detected if empty). If they are equal, the request bypassed the proxy, and the proxy is **rejected**.
-* **detect tampering**: the per-request nonce must come back unchanged. An injected page, a captive portal or a stale cache fails with `tampered`.
-* **classify anonymity** for plain HTTP forwarding. This is a documented test, not a claim:
-  * `transparent`: our origin IP appears in `Via`, `X-Forwarded-For` or `Forwarded`
-  * `anonymous`: one of those headers is present, but it does not disclose our IP
-  * `elite`: none of those headers reached the probe, and the origin IP is not disclosed
-  * `tunnel`: CONNECT/SOCKS. The proxy cannot rewrite end-to-end content, so no anonymity level is claimed.
-
-Settings: `PROBE_HTTP_URL=http://<vps-ip>/probe` and `PROBE_OWNED=true`. The probe must be reached **directly**. Do not put it behind Cloudflare or any other CDN, because the CDN would become the "exit IP".
-
-The **HTTPS capability check** (CONNECT or SOCKS tunnel → TLS handshake with full certificate verification → tiny GET) needs a real certificate. It uses `PROBE_HTTPS_URL`, which defaults to `https://api.ipify.org/?format=json`, a public IP echo service with a response of a few bytes. For zero third-party traffic, point it at your own HTTPS endpoint, for example a domain on this nginx with a Let's Encrypt certificate that serves the same `/probe` location. Each proxy's HTTPS capability is re-checked at most once per `https.recheck_interval_seconds` (default 30 min). A proxy that intercepts TLS fails certificate verification and loses the HTTPS points.
-
-Without an owned probe (`PROBE_OWNED=false`, the default for `PROBE_HTTP_URL=http://api.ipify.org/?format=json`), exit IP and bypass are still verified, but nonce and header checks are skipped.
+HTTPS capability remains a separate check: a fresh connection is opened through the proxy, a TLS handshake with certificate verification is performed, and a tiny HTTPS response is read. This does not replace the ProxyScrape anonymity judge.
 
 ## REST API
 
@@ -188,7 +160,7 @@ Interactive docs are served at `/docs`. The base path is `/api/v1`. All response
 | `min_success_rate` | 0–1, recent window |
 | `max_age` | seconds since last **successful** validation. Default 900 (FRESH + GOOD). Values up to 3600 must be requested explicitly and also return STALE proxies. |
 | `https` | `true` / `false` |
-| `anonymity` | `elite`, `anonymous`, `transparent`, `tunnel` |
+| `anonymity` | `elite`, `anonymous`, `transparent` |
 | `sort` | `score` (default), `latency`, `fresh` |
 | `limit` | default 100 for JSON and `API_MAX_LIMIT` (5000) for txt/url |
 | `format` | `json` (default), `txt` (`ip:port`), `url` (`protocol://ip:port`) |
@@ -218,7 +190,7 @@ curl 'http://<server>/api/v1/proxies?protocol=socks5&quality=premium&format=txt'
       "protocol": "socks5", "ip": "203.0.113.20", "port": 1080,
       "score": 94.0, "quality": "premium", "latency_ms": 421,
       "recent_success_rate": 1.0, "historical_success_rate": 0.96, "checks": 58,
-      "https": true, "exit_ip_verified": true, "anonymity": "tunnel",
+      "https": true, "exit_ip_verified": true, "anonymity": "elite",
       "last_checked": "2026-10-01T12:03:12Z", "last_success": "2026-10-01T12:03:12Z",
       "age_seconds": 108.4, "freshness": "fresh"
     }
@@ -264,11 +236,13 @@ The worker exposes its own `/health` and `/ready` on the internal port 8081. Its
 
 ## Generated files
 
-Every refresh (5 min) writes these files to `data/generated/`, served at `http://<server>/data/`:
+Every refresh (2 min) writes these files to `data/generated/`, served at `http://<server>/data/`:
 
 | File | Content |
 |---|---|
-| `all.txt` | all served proxies, `protocol://ip:port`, best first |
+| `all.txt` | combined served working pool, `protocol://ip:port`, fastest response first |
+| `all-working.txt` | explicit alias of `all.txt`, fastest response first |
+| `elite.txt`, `anonymous.txt`, `transparent.txt` | working proxies grouped by ProxyScrape-style anonymity, fastest first |
 | `http.txt`, `socks4.txt`, `socks5.txt` | per protocol, `ip:port` |
 | `https.txt` | HTTP proxies with verified CONNECT/TLS, `ip:port` |
 | `premium.txt`, `high.txt`, `normal.txt`, `backup.txt` | per class, `protocol://ip:port` |
@@ -285,8 +259,8 @@ Stage 1  syntax        normalizer (collector) – invalid records never reach th
 Stage 2  TCP           connect, timeout 2 s                                   ┐ FAST stage
 Stage 3  handshake     SOCKS5 greeting+CONNECT / SOCKS4(a) CONNECT, 3 s       ┘ (fast_concurrency)
          (HTTP forward proxies have no handshake: the probe request is the protocol check)
-Stage 4  probe         GET /probe?n=<nonce> through the tunnel                ┐ DEEP stage
-         verify        status 200, nonce, exit IP ≠ origin, anonymity headers │ (deep_concurrency)
+Stage 4  judge         GET ProxyScrape judge through the proxy                ┐ DEEP stage
+         classify      status 200, exit IP, elite/anonymous/transparent       │ (deep_concurrency)
 Stage 5  HTTPS         new connection: CONNECT/SOCKS → TLS (cert verified)    │
                        → GET, when due (at most every 30 min per proxy)       ┘
 Stage 6  reliability   2 confirmation probes at +30 s and +90 s, then class-based revalidation
@@ -307,7 +281,7 @@ All weights, tiers and thresholds live in `config/scoring.yaml`, and the weights
 | latency | 20 | tier factor of the EWMA latency: <500 ms 1.0 · <1000 0.85 · <2000 0.65 · <3000 0.40 · <5000 0.15 · else 0 |
 | https | 10 | last HTTPS capability check passed |
 | protocol | 5 | 1 − share of checks failed with protocol/handshake errors |
-| exit_ip | 5 | last exit IP verified (probe saw a non-origin IP, nonce matched) |
+| exit_ip | 5 | last judge/probe response produced a valid observed exit IP |
 | consistency | 5 | 0.5 × exit-IP stability (1 − changes / successes) + 0.5 × latency stability (1 − std-dev/mean) |
 
 Then `score = Σ − consecutive_failures × 8`, clamped to 0–100.
