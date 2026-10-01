@@ -31,6 +31,13 @@ class SnapshotExporter:
         now_ts = now.timestamp()
         fresh = self.cfg.freshness
         selected = filter_pool(records, PoolFilter(max_age=fresh.export_max_age_seconds), now_ts)
+        selected.sort(
+            key=lambda r: (
+                r["latency_ms"] is None,
+                r["latency_ms"] if r["latency_ms"] is not None else 0,
+                -float(r.get("score") or 0),
+            )
+        )
         write_text_files(self.directory, selected)
         write_proxies_json(self.directory, selected, generated_at=iso(now) or "", now_ts=now_ts, fresh=fresh)
         write_stats_json(self.directory, stats)
