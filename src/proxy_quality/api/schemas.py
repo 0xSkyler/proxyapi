@@ -38,7 +38,6 @@ class AnonymityParam(StrEnum):
     elite = "elite"
     anonymous = "anonymous"
     transparent = "transparent"
-    tunnel = "tunnel"
 
 
 class ProxyOut(BaseModel):
