@@ -1,44 +1,24 @@
-"""Exit-IP verification and (for plain HTTP proxies) header-based anonymity.
+"""Exit-IP verification and ProxyScrape-style anonymity classification.
 
-Probe response formats understood:
-
-* owned probe (``nginx/proxy.conf`` ``location = /probe``)::
-
-      ip=<address the probe saw>
-      n=<nonce we sent>
-      via=<Via header>
-      xff=<X-Forwarded-For header>
-      fwd=<Forwarded header>
-
-* JSON ``{"ip": "..."}`` (ipify style) or a bare IP (icanhazip style).
-
-Verdicts:
-
-* the address seen by the probe equals our own public (origin) IP
-  -> ``bypass``: traffic did not leave through the proxy -> rejected
-* owned probe and the nonce is missing / different
-  -> ``tampered``: the proxy served content that is not our probe's reply
-  (injected page, captive portal, stale cache)
-* otherwise the exit IP is *verified*.
-
-Anonymity (documented definition, plain-HTTP forwarding only, owned probe only):
-
-* ``transparent``: our origin IP appears in Via / X-Forwarded-For / Forwarded
-* ``anonymous``:   proxy headers present but our origin IP is not disclosed
-* ``elite``:       none of those headers reached the probe and the origin IP is not disclosed
-
-CONNECT and SOCKS tunnels cannot rewrite end-to-end content, so they are
-reported as ``tunnel`` instead of claiming an anonymity level.
+Supports the local owned probe, ProxyScrape judge responses, JSON IP echoes,
+and plain IP responses. ProxyScrape judge responses use the same anonymity
+ordering as ProxyScrape's open-source checker: transparent when the validator's
+public IP is disclosed, anonymous when proxy-identifying headers are present,
+otherwise elite.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass
 
 import orjson
 
 from proxy_quality.validator.results import ErrorKind
+
+_REMOTE_ADDR_RE = re.compile(r"(?im)^\s*REMOTE_ADDR\s*=\s*([^\s]+)")
+_PROXY_ANON_HEADER_RE = re.compile(r"(?i)HTTP_VIA|PROXY_REMOTE_ADDR")
 
 
 @dataclass(slots=True)
@@ -48,6 +28,8 @@ class ProbeEcho:
     via: str | None = None
     xff: str | None = None
     fwd: str | None = None
+    raw: str | None = None
+    proxyscrape_judge: bool = False
 
 
 @dataclass(slots=True)
@@ -70,18 +52,27 @@ def _clean_ip(value: str | None) -> str | None:
 
 
 def parse_probe_body(body: bytes) -> ProbeEcho:
-    text = body[:4096].decode("utf-8", errors="replace").strip()
+    text = body[:16384].decode("utf-8", errors="replace").strip()
     if not text:
         return ProbeEcho(ip=None)
+
+    if match := _REMOTE_ADDR_RE.search(text):
+        return ProbeEcho(
+            ip=_clean_ip(match.group(1)),
+            raw=text,
+            proxyscrape_judge=True,
+        )
+
     if text.startswith("{"):
         try:
             data = orjson.loads(text)
         except orjson.JSONDecodeError:
-            return ProbeEcho(ip=None)
+            return ProbeEcho(ip=None, raw=text)
         if isinstance(data, dict):
             ip = data.get("ip") or data.get("origin")
-            return ProbeEcho(ip=_clean_ip(str(ip)) if ip else None, nonce=data.get("n"))
-        return ProbeEcho(ip=None)
+            return ProbeEcho(ip=_clean_ip(str(ip)) if ip else None, nonce=data.get("n"), raw=text)
+        return ProbeEcho(ip=None, raw=text)
+
     if "=" in text:
         kv: dict[str, str] = {}
         for line in text.splitlines():
@@ -94,12 +85,22 @@ def parse_probe_body(body: bytes) -> ProbeEcho:
             via=kv.get("via") or None,
             xff=kv.get("xff") or None,
             fwd=kv.get("fwd") or None,
+            raw=text,
         )
-    return ProbeEcho(ip=_clean_ip(text.splitlines()[0]))
+
+    return ProbeEcho(ip=_clean_ip(text.splitlines()[0]), raw=text)
 
 
 def _mentions(header: str | None, ip: str) -> bool:
     return bool(header) and ip in header  # type: ignore[operator]
+
+
+def _proxyscrape_anonymity(raw: str, origin_ip: str | None) -> str:
+    if origin_ip and origin_ip in raw:
+        return "transparent"
+    if _PROXY_ANON_HEADER_RE.search(raw):
+        return "anonymous"
+    return "elite"
 
 
 def evaluate_exit(
@@ -110,23 +111,40 @@ def evaluate_exit(
     owned_probe: bool,
     plain_http: bool,
 ) -> ExitVerdict:
+    _ = plain_http
+
     if echo.ip is None:
-        return ExitVerdict(False, ErrorKind.TAMPERED if owned_probe else ErrorKind.BAD_RESPONSE, None, False, None,
-                           detail="no_ip_in_probe_reply")
+        return ExitVerdict(
+            False,
+            ErrorKind.TAMPERED if owned_probe else ErrorKind.BAD_RESPONSE,
+            None,
+            False,
+            None,
+            detail="no_ip_in_probe_reply",
+        )
     if owned_probe and expected_nonce is not None and echo.nonce != expected_nonce:
         return ExitVerdict(False, ErrorKind.TAMPERED, echo.ip, False, None, detail="nonce_mismatch")
+
+    if echo.proxyscrape_judge:
+        return ExitVerdict(
+            True,
+            None,
+            echo.ip,
+            origin_ip is not None,
+            _proxyscrape_anonymity(echo.raw or "", origin_ip),
+        )
+
     if origin_ip and echo.ip == origin_ip:
         return ExitVerdict(False, ErrorKind.BYPASS, echo.ip, False, None, detail="exit_ip_is_origin")
 
-    anonymity: str | None
-    if not plain_http:
-        anonymity = "tunnel"
-    elif not owned_probe:
-        anonymity = None  # third-party probe does not echo request headers
-    elif origin_ip and any(_mentions(h, origin_ip) for h in (echo.via, echo.xff, echo.fwd)):
-        anonymity = "transparent"
-    elif echo.via or echo.xff or echo.fwd:
-        anonymity = "anonymous"
+    if owned_probe:
+        if origin_ip and any(_mentions(h, origin_ip) for h in (echo.via, echo.xff, echo.fwd)):
+            anonymity = "transparent"
+        elif echo.via or echo.xff or echo.fwd:
+            anonymity = "anonymous"
+        else:
+            anonymity = "elite"
     else:
-        anonymity = "elite"
+        anonymity = None
+
     return ExitVerdict(True, None, echo.ip, origin_ip is not None, anonymity)
