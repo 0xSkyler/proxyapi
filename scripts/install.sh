@@ -86,14 +86,13 @@ if [[ ! -f .env ]]; then
   cp .env.example .env
   pw="$(openssl rand -hex 24)"
   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${pw}|" .env
-  public_ip="$(curl -4 -fsS --max-time 10 https://api.ipify.org || curl -4 -fsS --max-time 10 https://checkip.amazonaws.com || true)"
+  public_ip="$(curl -4 -fsS --max-time 10 https://api.proxyscrape.com/ip.php || curl -4 -fsS --max-time 10 https://api.ipify.org || curl -4 -fsS --max-time 10 https://checkip.amazonaws.com || true)"
   public_ip="$(echo "$public_ip" | tr -d '[:space:]')"
   if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    sed -i "s|^PROBE_HTTP_URL=.*|PROBE_HTTP_URL=http://${public_ip}/probe|" .env
     sed -i "s|^ORIGIN_IP=.*|ORIGIN_IP=${public_ip}|" .env
-    log "probe URL set to http://${public_ip}/probe"
+    log "origin IP detected; ProxyScrape judge validation remains enabled"
   else
-    log "could not detect the public IP: edit PROBE_HTTP_URL / ORIGIN_IP in .env"
+    log "could not detect the public IP: leave ORIGIN_IP empty for runtime auto-detection"
   fi
   chmod 600 .env
 else
