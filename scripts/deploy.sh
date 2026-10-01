@@ -26,6 +26,13 @@ else
 fi
 log "at $(git log -1 --format='%h %s')"
 
+# Keep existing installations aligned with the repository policy.
+# These are intentionally fixed for this deployment: ProxyScrape judge
+# validation and a two-minute source refresh.
+sed -i "s|^REFRESH_INTERVAL_SECONDS=.*|REFRESH_INTERVAL_SECONDS=120|" .env
+sed -i "s|^PROBE_HTTP_URL=.*|PROBE_HTTP_URL=http://judge1.api.proxyscrape.com|" .env
+sed -i "s|^PROBE_OWNED=.*|PROBE_OWNED=false|" .env
+
 log "building image"
 docker compose build --pull
 
