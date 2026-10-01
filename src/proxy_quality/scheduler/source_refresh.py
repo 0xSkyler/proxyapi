@@ -1,4 +1,4 @@
-"""The 5-minute refresh cycle.
+"""The 2-minute refresh cycle.
 
 Runs inside the long-lived worker (never by restarting the application):
 

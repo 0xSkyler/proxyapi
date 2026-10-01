@@ -71,7 +71,7 @@ async def test_claim_lease_save_and_pool(repo, vcfg, scfg):
     assert await repo.claim_due(limit=10, now=now, lease_seconds=300, revival_window_seconds=3600) == []
     assert await repo.due_count(now) == 0
 
-    good, bad = sorted(claimed, key=lambda s: s.port)[::-1]  # 3128 -> bad, 1080 -> good
+    good, bad = sorted(claimed, key=lambda s: s.port)  # 1080 -> good, 3128 -> bad
     t = utcnow()
     for i in range(3):
         good = apply_result(

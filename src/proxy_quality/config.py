@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     log_format: Literal["json", "text"] = "json"
 
     # scheduler
-    refresh_interval_seconds: int = Field(300, ge=60)
+    refresh_interval_seconds: int = Field(120, ge=60)
     pool_sync_interval_seconds: int = Field(20, ge=5)
     stats_interval_seconds: int = Field(10, ge=2)
     cleanup_interval_seconds: int = Field(3600, ge=300)
@@ -64,11 +64,11 @@ class Settings(BaseSettings):
     adaptive_concurrency: bool | None = None
 
     # probe / exit-IP verification
-    probe_http_url: str = "http://api.ipify.org/?format=json"
+    probe_http_url: str = "http://judge1.api.proxyscrape.com"
     probe_https_url: str = "https://api.ipify.org/?format=json"
     probe_owned: bool = False
     origin_ip: str | None = None
-    origin_ip_services: str = "https://api.ipify.org,https://checkip.amazonaws.com,https://icanhazip.com"
+    origin_ip_services: str = "https://api.proxyscrape.com/ip.php,https://api.ipify.org,https://checkip.amazonaws.com,https://icanhazip.com"
     origin_ip_refresh_seconds: int = Field(3600, ge=300)
 
     # safety
@@ -323,7 +323,7 @@ class SourceDefaults(_Strict):
     max_bytes: int = Field(20_000_000, ge=1024)
     user_agent: str = "proxy-quality-api/1.0 (+source refresh)"
     concurrency: int = Field(8, ge=1, le=64)
-    min_interval_seconds: int = Field(300, ge=60)
+    min_interval_seconds: int = Field(120, ge=60)
 
 
 class SourceCfg(_Strict):

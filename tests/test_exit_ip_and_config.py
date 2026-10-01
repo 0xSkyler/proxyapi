@@ -21,9 +21,13 @@ def test_parse_owned_probe_body():
     assert (e.ip, e.nonce, e.via, e.xff, e.fwd) == ("198.51.100.4", "abc123", "1.1 squid", None, None)
 
 
-def test_parse_json_and_plain_bodies():
+def test_parse_json_plain_and_proxyscrape_judge_bodies():
     assert parse_probe_body(b'{"ip":"198.51.100.4"}').ip == "198.51.100.4"
     assert parse_probe_body(b"198.51.100.4\n").ip == "198.51.100.4"
+    judge = parse_probe_body(
+        b"AZ Environment variables\nREMOTE_ADDR = 198.51.100.4\nHTTP_VIA = 1.1 squid\n"
+    )
+    assert judge.ip == "198.51.100.4" and judge.proxyscrape_judge is True
     assert parse_probe_body(b"<html>").ip is None
     assert parse_probe_body(b"").ip is None
 
@@ -38,7 +42,19 @@ def test_parse_json_and_plain_bodies():
         (b"ip=203.0.113.7\nn=N1\n", "N1", "203.0.113.7", True, False, ErrorKind.BYPASS, None),
         (b'{"ip":"198.51.100.4"}', None, "203.0.113.7", False, True, None, None),
         (b"<html>ad</html>", None, None, False, True, ErrorKind.BAD_RESPONSE, None),
-        (b"ip=198.51.100.4\nn=N1\n", "N1", None, True, False, None, "tunnel"),
+        (b"ip=198.51.100.4\nn=N1\n", "N1", None, True, False, None, "elite"),
+        (
+            b"AZ Environment variables\nREMOTE_ADDR = 198.51.100.4\n",
+            None, "203.0.113.7", False, True, None, "elite",
+        ),
+        (
+            b"AZ Environment variables\nREMOTE_ADDR = 198.51.100.4\nHTTP_VIA = 1.1 squid\n",
+            None, "203.0.113.7", False, True, None, "anonymous",
+        ),
+        (
+            b"AZ Environment variables\nREMOTE_ADDR = 203.0.113.7\n",
+            None, "203.0.113.7", False, True, None, "transparent",
+        ),
     ],
 )
 def test_evaluate_exit(body, nonce, origin, owned, plain, err, anon):
@@ -67,9 +83,12 @@ def test_shipped_configs_are_valid(repo_settings):
     src = load_sources_config(repo_settings)
     assert sum(s.weights.values()) == pytest.approx(100)
     assert v.concurrency.fast == 300
-    # every shipped example source is disabled and unverified by default
-    assert src.sources and all(not x.redistribution_verified for x in src.sources)
-    assert all(not x.enabled for x in src.sources)
+    assert len(src.sources) == 1
+    source = src.sources[0]
+    assert source.name == "proxyscrape_v4"
+    assert source.enabled is True and source.redistribution_verified is True
+    assert source.min_interval_seconds == 120
+    assert "api.proxyscrape.com/v4/free-proxy-list/get" in source.url
 
 
 def test_env_overrides(repo_settings):

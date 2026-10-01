@@ -27,7 +27,7 @@ def row(protocol, host, port, score, cls, latency, age_s, https=False, rate=1.0)
         "recent_latency_ms": latency, "recent_success_rate": rate, "historical_success_rate": 0.9,
         "total_checks": 12, "last_checked": now - timedelta(seconds=age_s),
         "last_success": now - timedelta(seconds=age_s), "https_ok": https, "exit_ip": host,
-        "exit_verified": True, "anonymity": "tunnel", "status": "active",
+        "exit_verified": True, "anonymity": "elite", "status": "active",
     }
 
 
@@ -62,8 +62,18 @@ def test_summary(records, vcfg):
 
 def test_text_files(records):
     files = render_text_files(records)
-    assert files["socks5.txt"].splitlines() == ["198.51.100.20:1080", "[2001:db8::1]:1080", "198.51.100.21:1080"]
-    assert "socks5://198.51.100.20:1080" in files["all.txt"]
+    assert files["all.txt"] == files["all-working.txt"]
+    assert files["all.txt"].splitlines()[:3] == [
+        "socks5://[2001:db8::1]:1080",
+        "socks5://198.51.100.20:1080",
+        "socks5://198.51.100.21:1080",
+    ]
+    assert files["socks5.txt"].splitlines() == [
+        "[2001:db8::1]:1080", "198.51.100.20:1080", "198.51.100.21:1080"
+    ]
+    assert files["elite.txt"] == files["all.txt"]
+    assert files["anonymous.txt"] == ""
+    assert files["transparent.txt"] == ""
     assert files["premium-socks5.txt"].count("\n") == 3
     assert files["https.txt"] == "198.51.100.30:8080\n"
     assert files["high.txt"] == "http://198.51.100.30:8080\n"
@@ -79,7 +89,8 @@ def test_export_writes_atomically_and_filters_stale(tmp_path, records, vcfg):
     assert not list(tmp_path.glob(".*.tmp"))
     data = orjson.loads((tmp_path / "proxies.json").read_bytes())
     assert data["count"] == 5 and all(p["freshness"] in ("fresh", "good") for p in data["proxies"])
-    for name in ("all.txt", "http.txt", "socks4.txt", "socks5.txt", "premium.txt", "high.txt", "normal.txt",
+    for name in ("all.txt", "all-working.txt", "elite.txt", "anonymous.txt", "transparent.txt",
+                 "http.txt", "socks4.txt", "socks5.txt", "premium.txt", "high.txt", "normal.txt",
                  "backup.txt", "premium-http.txt", "premium-socks4.txt", "premium-socks5.txt", "stats.json"):
         assert (tmp_path / name).exists(), name
     del exp

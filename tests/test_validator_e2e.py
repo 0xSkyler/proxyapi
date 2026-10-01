@@ -48,11 +48,9 @@ async def test_valid_proxies(vcfg, protocol, handler):
     assert result.tcp_ms is not None and result.total_ms is not None
     assert result.total_ms >= result.tcp_ms
     assert result.ttfb_ms is not None
-    if protocol == "http":
-        assert result.anonymity == "elite"
-    else:
+    assert result.anonymity == "elite"
+    if protocol != "http":
         assert result.handshake_ms is not None
-        assert result.anonymity == "tunnel"
 
 
 async def test_connection_refused(vcfg):
